@@ -24,9 +24,17 @@ const AccueilPassager = ({ navigation, route }) => {
         longitude: 11.5021,
     });
     const webViewRef = useRef(null);
+    const watchIdRef = useRef(null);
 
     useEffect(() => {
         demanderPermission();
+
+        // Nettoyage de la puce GPS quand on ferme l'écran
+        return () => {
+            if (watchIdRef.current !== null) {
+                Geolocation.clearWatch(watchIdRef.current);
+            }
+        };
     }, []);
 
     const demanderPermission = async () => {
@@ -50,6 +58,7 @@ const AccueilPassager = ({ navigation, route }) => {
     };
 
     const obtenirPosition = () => {
+        // 1. Position initiale immédiate
         Geolocation.getCurrentPosition(
             pos => {
                 const nouvellePosition = {
@@ -58,22 +67,36 @@ const AccueilPassager = ({ navigation, route }) => {
                 };
                 setPosition(nouvellePosition);
 
+                // Envoi initial à Firebase Realtime Database
+                const userId = utilisateur?.uid || 'inconnu';
+                if (userId !== 'inconnu') {
+                    database()
+                        .ref(`/trajets/passagers/${userId}`)
+                        .set({
+                            latitude: pos.coords.latitude,
+                            longitude: pos.coords.longitude,
+                            nom: utilisateur?.nom || 'Passager',
+                            timestamp: database.ServerValue.TIMESTAMP,
+                        })
+                        .catch(err => console.log('Erreur Firebase initiale:', err));
+                }
+
                 if (webViewRef.current) {
                     webViewRef.current.injectJavaScript(`
-            if (typeof userMarker !== 'undefined') {
-              userMarker.setLatLng([${pos.coords.latitude}, ${pos.coords.longitude}]);
-              map.setView([${pos.coords.latitude}, ${pos.coords.longitude}], 14);
-            }
-            true;
-          `);
+                        if (typeof userMarker !== 'undefined') {
+                          userMarker.setLatLng([${pos.coords.latitude}, ${pos.coords.longitude}]);
+                          map.setView([${pos.coords.latitude}, ${pos.coords.longitude}], 14);
+                        }
+                        true;
+                    `);
                 }
             },
             error => console.log(error),
             { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
         );
 
-        // Mise à jour toutes les 5 secondes
-        Geolocation.watchPosition(
+        // 2. Écoute en temps réel avec mise à jour Firebase
+        watchIdRef.current = Geolocation.watchPosition(
             pos => {
                 const nouvellePosition = {
                     latitude: pos.coords.latitude,
@@ -81,23 +104,36 @@ const AccueilPassager = ({ navigation, route }) => {
                 };
                 setPosition(nouvellePosition);
 
+                // Mise à jour continue sur Firebase si le passager bouge
+                const userId = utilisateur?.uid || 'inconnu';
+                if (userId !== 'inconnu') {
+                    database()
+                        .ref(`/trajets/passagers/${userId}`)
+                        .update({
+                            latitude: pos.coords.latitude,
+                            longitude: pos.coords.longitude,
+                            timestamp: database.ServerValue.TIMESTAMP,
+                        })
+                        .catch(err => console.log('Erreur mise à jour Firebase:', err));
+                }
+
                 if (webViewRef.current) {
                     webViewRef.current.injectJavaScript(`
-            if (typeof userMarker !== 'undefined') {
-              userMarker.setLatLng([${pos.coords.latitude}, ${pos.coords.longitude}]);
-            }
-            if (typeof routeLine !== 'undefined' && routeLine) {
-              routeLine.setLatLngs([
-                [${pos.coords.latitude}, ${pos.coords.longitude}],
-                routeLine.getLatLngs()[1]
-              ]);
-            }
-            true;
-          `);
+                        if (typeof userMarker !== 'undefined') {
+                          userMarker.setLatLng([${pos.coords.latitude}, ${pos.coords.longitude}]);
+                        }
+                        if (typeof routeLine !== 'undefined' && routeLine) {
+                          routeLine.setLatLngs([
+                            [${pos.coords.latitude}, ${pos.coords.longitude}],
+                            routeLine.getLatLngs()[1]
+                          ]);
+                        }
+                        true;
+                    `);
                 }
             },
             error => console.log(error),
-            { enableHighAccuracy: true, distanceFilter: 10 }
+            { enableHighAccuracy: true, distanceFilter: 10, interval: 5000, fastestInterval: 2000 }
         );
     };
 
@@ -151,23 +187,23 @@ const AccueilPassager = ({ navigation, route }) => {
 
                 if (webViewRef.current) {
                     webViewRef.current.injectJavaScript(`
-            if (typeof destMarker !== 'undefined' && destMarker) {
-              map.removeLayer(destMarker);
-            }
-            if (typeof routeLine !== 'undefined' && routeLine) {
-              map.removeLayer(routeLine);
-            }
-            destMarker = L.marker([${coords.latitude}, ${coords.longitude}])
-              .addTo(map)
-              .bindPopup('🏁 ${destination}')
-              .openPopup();
-            routeLine = L.polyline([
-              [${position.latitude}, ${position.longitude}],
-              [${coords.latitude}, ${coords.longitude}]
-            ], {color: 'green', weight: 5, dashArray: '10, 5'}).addTo(map);
-            map.fitBounds(routeLine.getBounds(), {padding: [50, 50]});
-            true;
-          `);
+                        if (typeof destMarker !== 'undefined' && destMarker) {
+                          map.removeLayer(destMarker);
+                        }
+                        if (typeof routeLine !== 'undefined' && routeLine) {
+                          map.removeLayer(routeLine);
+                        }
+                        destMarker = L.marker([${coords.latitude}, ${coords.longitude}])
+                          .addTo(map)
+                          .bindPopup('🏁 ${destination}')
+                          .openPopup();
+                        routeLine = L.polyline([
+                          [${position.latitude}, ${position.longitude}],
+                          [${coords.latitude}, ${coords.longitude}]
+                        ], {color: 'green', weight: 5, dashArray: '10, 5'}).addTo(map);
+                        map.fitBounds(routeLine.getBounds(), {padding: [50, 50]});
+                        true;
+                    `);
                 }
                 Alert.alert('✅ Destination trouvée !', `${destination} localisée sur la carte.`);
             } else {
